@@ -147,19 +147,6 @@ export abstract class DifferentialDownloader {
 
       streams.push(fileOut)
 
-      if (this.options.onProgress && this.options.cancellationToken) {
-        let contentLength = 0;
-        for (const task of tasks) {
-          const length = task.end - task.start
-          if (task.kind === OperationKind.DOWNLOAD) {
-            contentLength += length
-          }
-        }
-        if (contentLength) {
-          streams.push(new ProgressCallbackTransform(contentLength, this.options.cancellationToken, this.options.onProgress));
-        }
-      }
-
       let lastStream = null
       for (const stream of streams) {
         stream.on("error", reject)
@@ -171,7 +158,21 @@ export abstract class DifferentialDownloader {
         }
       }
 
-      const firstStream = streams[0]
+      const firstStream = streams[0];
+
+      let downloadStream: any;
+
+      if (this.options.cancellationToken && this.options.onProgress) {
+        let contentLength = 0;
+        for (const task of tasks) {
+          const length = task.end - task.start
+          if (task.kind === OperationKind.DOWNLOAD) {
+            contentLength += length
+          }
+        }
+        downloadStream = new ProgressCallbackTransform(contentLength, this.options.cancellationToken, this.options.onProgress);
+        downloadStream.pipe(firstStream);
+      }
 
       let w: any
       if (this.options.isUseMultipleRangeRequest) {
@@ -190,9 +191,17 @@ export abstract class DifferentialDownloader {
       w = (index: number): void => {
         if (index >= tasks.length) {
           if (this.fileMetadataBuffer != null) {
-            firstStream.write(this.fileMetadataBuffer)
+            if (downloadStream) {
+              downloadStream.write(this.fileMetadataBuffer)
+            } else {
+              firstStream.write(this.fileMetadataBuffer)
+            }
           }
-          firstStream.end()
+          if (downloadStream) {
+            downloadStream.end()
+          } else {
+            firstStream.end()
+          }
           return
         }
 
@@ -216,9 +225,16 @@ export abstract class DifferentialDownloader {
             reject(createHttpError(response))
           }
 
-          response.pipe(firstStream, {
-            end: false
-          })
+          if (downloadStream) {
+            response.pipe(downloadStream, {
+              end: false
+            })
+          } else {
+            response.pipe(firstStream, {
+              end: false
+            })
+          }
+
           response.once("end", () => {
             if (++downloadOperationCount === 100) {
               downloadOperationCount = 0
